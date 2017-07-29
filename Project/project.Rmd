@@ -1,0 +1,165 @@
+---
+title: "Fuel consuption with respect to transmission type"
+author: "j-ros"
+date: "29 de julio de 2017"
+output: html_document
+---
+
+##Abstract
+In this report we are going to study the influence of transmission type (manual or automatic) in fuel consumption in miles per gallon, using data from the mtcars dataset in R. Even though data suggests that manual cars have higher fuel consumption with respect to automatic cars, this assumption is not significant at a 95\% confidence level.
+
+## Introduction
+In this report we are going to explore the relation between fuel consumtion in miles per gallon (mpg) with respct to transmission type (manual or automatic). To this end we are going to use the cars dataset in R. This dataset comprises data for 32 automobile models from 1973-1974 and was extracted from the 1974 Motor Trend US magazine. It contains variables for the fuel consumption (mpg) and transmission type (am) along with several other veariables of interest. There are 19 automatic cars and 13 manual cars in the dataset.
+
+## Data
+
+First we are going to visualize the relation between fuel consumption and transmission type in a boxplot. It seems that the manual cars have a higher fuel consumption and a higher variance.
+
+```{r,fig.show='hide'}
+data(mtcars)
+boxplot(mtcars$mpg~mtcars$am,main="mpg vs transmission type",xlab="Transmission type",ylab="Miles per gallon (mpg)")
+```
+
+We are also going to look at a pairs plot to identify covariates that might have high correlation. It seems that the variables cyl (number of cylinders), disp (displacement), hp (horsepower) and wt (weight) are highly correlated while drat (rear axle ratio) is inversely correlated with the rest of them.
+
+```{r,fig.show='hide'}
+pairs(mtcars)
+dat <- mtcars[c(1,3,9)]
+```
+
+##Model
+
+To answer our initial question we will postulate a linear regression model using mpg (fuel consuption in miles per gallon) as our outcome and am (transmission type: automatic or manual) and disp (displacement) as our covariates. This variable measures the volume swept inside the cylinders by the pistons and we expect that is therefore explains partly the fuel consumption of the car. In addition to it, we have seen in the previous analysis that it is highly correlated to number of cylinders, horsepower and weight, which also have an impact on fuel consumption.
+
+Using this model we can assess wether or not transmission type has a significant contribution to fuel consumption by assessing whether or not the associated parameter is statistically different from zero or not.
+
+The full hierarchical model is
+
+$mpg_i \sim dnorm(mu_i,prec) \quad i=1,..,length(mtcars)$
+
+$mu_i = b_1 + b_2disp+b_3am \quad i=1,..,length(mtcars)$
+
+$b_j \sim dnorm(0,1/1e6) \quad j=1,..,3$
+
+$prec \sim dgamma(1/2,20/2)$
+
+using a fairly uninformative prior on the beta parameters and a  prior distribution for the variance of the outcome variable as an inverse gamma with sample size 1 and prior guess of 20, according to data.
+
+```{r,message=FALSE,results='hide',fig.show='hide'}
+library(rjags)
+mod_string1 = " model {
+        for (i in 1:length(mpg)) {
+                mpg[i] ~ dnorm(mu[i], prec)
+                mu[i] = b[1] + b[2]*disp[i] + b[3]*am[i]
+        }
+
+        for (j in 1:3) {
+                b[j] ~ dnorm(0.0, 1.0/1.0e6)
+        }
+
+        prec ~ dgamma(1.0/2.0, 1.0*20.0/2.0)
+        sig = sqrt(1.0/prec)
+} "
+
+data_jags = as.list(dat)
+params = c("sig", "b")
+mod1 = jags.model(textConnection(mod_string1), data=data_jags, n.chains=3)
+update(mod1,1e3)
+mod_sim1 = coda.samples(model=mod1,
+                        variable.names=params,
+                        n.iter=5e3)
+mod_csim1 = as.mcmc(do.call(rbind, mod_sim1))
+
+## convergence diagnostics
+plot(mod_sim1,ask=TRUE)
+
+gelman.diag(mod_sim1)
+autocorr.diag(mod_sim1)
+autocorr.plot(mod_sim1)
+effectiveSize(mod_sim1)
+
+## compute DIC
+dic1 = dic.samples(mod1, n.iter=1e3)
+
+#Check residuals
+
+pm_params1 = colMeans(mod_csim1)
+
+yhat1 = pm_params1[1] + dat$disp * pm_params1[2] + dat$am * pm_params1[3]
+resid1 = dat$mpg - yhat1
+plot(resid1)
+plot(yhat1,resid1)
+```
+
+Since we have seen that te outcome variable variance is not exactly the same for both transmission types, we also modify the above model to include a different variance for each group (15 for automatic cars and 40 for manual cars).
+
+$mpg_i \sim dnorm(mu_i,prec_k) \quad i=1,..,length(mtcars)$
+
+$mu_i = b_1 + b_2disp+b_3am \quad i=1,..,length(mtcars)$
+
+$b_j \sim dnorm(0,1/1e6) \quad j=1,..,3$
+
+$prec_k \sim dgamma(1/2,v_k/2) \quad k=1,2$
+
+$v_1=15 \quad v_2=40$ 
+
+```{r,message=FALSE,results='hide',fig.show='hide'}
+mod_string2 = " model {
+        for (i in 1:length(mpg)) {
+                mpg[i] ~ dnorm(mu[i], prec[am[i]+1])
+                mu[i] = b[1] + b[2]*disp[i] + b[3]*am[i]
+        }
+
+        for (j in 1:3) {
+                b[j] ~ dnorm(0.0, 1.0/1.0e6)
+        }
+        
+        prec[1] ~ dgamma(1.0/2.0, 1.0*15.0/2.0)
+        sig[1] = sqrt(1.0/prec[1])
+        prec[2] ~ dgamma(1.0/2.0, 1.0*40.0/2.0)
+        sig[2] = sqrt(1.0/prec[2])
+        
+} "
+
+mod2 = jags.model(textConnection(mod_string2), data=data_jags, n.chains=3)
+update(mod2,1e3)
+mod_sim2 = coda.samples(model=mod2,
+                        variable.names=params,
+                        n.iter=5e3)
+mod_csim2 = as.mcmc(do.call(rbind, mod_sim2))
+
+## convergence diagnostics
+plot(mod_sim2,ask=TRUE)
+
+gelman.diag(mod_sim2)
+autocorr.diag(mod_sim2)
+autocorr.plot(mod_sim2)
+effectiveSize(mod_sim2)
+
+## compute DIC
+dic2 = dic.samples(mod2, n.iter=1e3)
+
+#Check residuals
+
+pm_params2 = colMeans(mod_csim2)
+
+yhat2 = pm_params2[1] + dat$disp * pm_params2[2] + dat$am * pm_params2[3]
+resid2 = dat$mpg - yhat2
+plot(resid2)
+plot(yhat2,resid2)
+```
+
+We can see that for both models the convergence diagnostics look okay, even though the effective size is a little bit low (<1000) in both cases. The residuals look okay in both cases too, confirming the model assumptions. Since the dic for model 2 is a little bit lower than the dic for model 1, we are going to use the second model for the results.
+
+##Results and conclusions
+
+In this section we are going to report the results for the second model and use it to provide an answer to our original question.
+
+```{r}
+summary(mod_sim2)
+```
+
+Since the coefficient for the transmission type, b[3], has 95\% confidence interval
+$(-0.70,5.87)$ we cannot conclude that it is significantly different from zero and therefore the assumption that manual cars have higher fuel consumption is not statistically significant at this level.
+
+A further analysis could be made letting chains run for a larger number of iterations so as to have a better effective sample for inference to improve confidence in the results.
